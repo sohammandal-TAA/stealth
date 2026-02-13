@@ -21,7 +21,7 @@ class JavaRouteRequest(BaseModel):
 class ForecastRequest(BaseModel):
     lat: Optional[float] = None
     lon: Optional[float] = None
-    station_id: int = 2
+    #station_id: int = 2
 
 class ForecastResponse(BaseModel):
     status: str

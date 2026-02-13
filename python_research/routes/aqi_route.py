@@ -1,8 +1,9 @@
 import os
 from fastapi import APIRouter, HTTPException
 from python_research.schemas.schema import JavaRouteRequest, ForecastRequest, ForecastResponse
-from python_research.services.aqi_engine import fetch_google_aqi_profile, interpolate_pollutants
+from python_research.services.aqi_engine import fetch_google_aqi_profile, interpolate_pollutants, fetch_google_weather_history, fetch_google_aqi_history
 import numpy as np
+from datetime import datetime, timedelta
 
 router = APIRouter()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -44,3 +45,55 @@ async def analyze_routes(data: JavaRouteRequest):
 #         "twelve_hour_forecast": [round(p, 2) for p in predictions],
 #         "message": "Pollution spike expected" if predictions[-1] > predictions[0] else "Stable conditions"
 #     }
+
+
+@router.post("/history_data_all")
+async def history_data_all(data: ForecastRequest):
+    print(f"DEBUG: Aggregating 24h history for Lat: {data.lat}, Lon: {data.lon}", flush=True)
+    
+    try:
+        # 1. Fetch both histories
+        # Make sure the pollutant code for PM2.5 in your helper matches 'pm25' from API
+        weather_res = fetch_google_weather_history(data.lat, data.lon, GOOGLE_API_KEY)
+        aqi_res = fetch_google_aqi_history(data.lat, data.lon, GOOGLE_API_KEY)
+        
+        if "error" in weather_res:
+            raise HTTPException(status_code=500, detail=f"Weather API: {weather_res['error']}")
+        if "error" in aqi_res:
+            raise HTTPException(status_code=500, detail=f"AQI API: {aqi_res['error']}")
+
+        # 2. Synchronize and format the data
+        # We assume both APIs return 24 hours. We'll zip them to align by time.
+        combined_history = []
+        
+        # Google APIs usually return data from oldest to newest or vice-versa.
+        # We pair them index by index.
+        for w_hour, a_hour in zip(weather_res["history"], aqi_res["history"]):
+            utc_time = datetime.fromisoformat(a_hour["time"].replace("Z", "+00:00"))
+            ist_time = utc_time + timedelta(hours=5, minutes=30)
+            readable_ist = ist_time.strftime("%Y-%m-%d %H:%M:%S")
+            combined_history.append({
+                "time": readable_ist,
+                # Pollutants
+                "pm2_5": a_hour.get("pm25", 0), 
+                "pm10": a_hour.get("pm10", 0),
+                "no2": a_hour.get("no2", 0),
+                "co": a_hour.get("co", 0),
+                "so2": a_hour.get("so2", 0),
+                "o3": a_hour.get("o3", 0),
+                # Weather - FIXED KEYS BELOW
+                "temp_c": w_hour.get("temp_c", 0),   
+                "wind": w_hour.get("wind", 0),       
+                "humidity": w_hour.get("humidity", 0)
+            })
+
+        return {
+            "status": "success",
+            "location": {"lat": data.lat, "lon": data.lon},
+            "history_count": len(combined_history),
+            "data": combined_history
+        }
+
+    except Exception as e:
+        print(f"ERROR: Combined History failed: {str(e)}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))

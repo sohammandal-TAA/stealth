@@ -9,7 +9,7 @@ root_dir = os.path.dirname(os.path.dirname(current_dir))
 env_path = os.path.join(root_dir, '.env')
 
 # Method 1: load_dotenv
-load_dotenv(dotenv_path=env_path)
+load_dotenv(dotenv_path=env_path,override=True)
 
 # Method 2: Manual Parse (Back-up)
 env_vars = dotenv_values(env_path)
@@ -43,8 +43,9 @@ def fetch_google_aqi_profile(lat, lon, api_key=None):
             "aqi": data.get('indexes', [{}])[0].get('aqi', 0),
             "pm25": pollutants.get('pm25', 0),
             "pm10": pollutants.get('pm10', 0),
-            "co": pollutants.get('co', 0),
             "no2": pollutants.get('no2', 0),
+            "co": pollutants.get('co', 0),
+            "so2": pollutants.get('so2', 0),
             "o3": pollutants.get('o3', 0)
         }
     except Exception as e:
@@ -81,3 +82,94 @@ def interpolate_pollutants(start_data, end_data, route_points):
             for i in range(len(route_profiles)): route_profiles[i][p_type] = v_start
             
     return route_profiles
+
+def fetch_google_weather_history(lat, lon, api_key=None):
+    # Use the passed key, or fallback to your global variable
+    key = api_key or GOOGLE_API_KEY
+    
+    # Endpoint for 24-hour historical weather
+    url = "https://weather.googleapis.com/v1/history/hours:lookup"
+    
+    # These must be sent as URL parameters for a GET request
+    params = {
+        "key": key,
+        "location.latitude": lat,
+        "location.longitude": lon,
+        "hours": 24, 
+        "unitsSystem": "METRIC",
+        "languageCode": "en"
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        
+        history_list = []
+        # The API returns an array of 'historyHours'
+        for hour in data.get('historyHours', []):
+            history_list.append({
+                "time": hour.get('interval', {}).get('startTime'),
+                "temp_c": hour.get('temperature', {}).get('degrees', 0),
+                "wind": hour.get('wind', {}).get('speed', {}).get('value', 0),
+                "humidity": hour.get('relativeHumidity', 0)
+            })
+            
+        return {
+            "lat": lat,
+            "lon": lon,
+            "history": history_list
+        }
+    except Exception as e:
+        print(f"⚠️ Weather History Fetch Failed for ({lat}, {lon}): {e}", flush=True)
+        return {"lat": lat, "lon": lon, "error": str(e)}
+
+
+def fetch_google_aqi_history(lat, lon, api_key=None):
+    key = api_key or GOOGLE_API_KEY
+    
+    # Endpoint for historical lookups
+    url = f"https://airquality.googleapis.com/v1/history:lookup?key={key}"
+    
+    payload = {
+        "location": {"latitude": lat, "longitude": lon},
+        "hours": 24,  
+        "pageSize": 24,
+        "universalAqi": False, 
+        "extraComputations": ["POLLUTANT_CONCENTRATION", "LOCAL_AQI"],
+        "languageCode": "en"
+    }
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        history_list = []
+        # The API returns a list of 'hoursInfo' objects
+        for hour_info in data.get('hoursInfo', []):
+            # SAFELY fetch concentrations using .get() to avoid KeyError
+            pollutants = {
+                p['code']: p.get('concentration', {}).get('value', 0) 
+                for p in hour_info.get('pollutants', [])
+            }
+            
+            history_list.append({
+                "time": hour_info.get('dateTime'),
+                "aqi": hour_info.get('indexes', [{}])[0].get('aqi', 0),
+                "pm25": pollutants.get('pm25', 0),
+                "pm10": pollutants.get('pm10', 0),
+                "no2": pollutants.get('no2', 0),
+                "co": pollutants.get('co', 0),
+                "so2": pollutants.get('so2', 0),
+                "o3": pollutants.get('o3', 0)
+            })
+            
+        return {
+            "lat": lat,
+            "lon": lon,
+            "history": history_list
+        }
+    except Exception as e:
+        print(f"⚠️ AQI History Fetch Failed for ({lat}, {lon}): {e}", flush=True)
+        return {"lat": lat, "lon": lon, "error": str(e)}

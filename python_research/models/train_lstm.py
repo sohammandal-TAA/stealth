@@ -27,7 +27,7 @@ feature_cols = continuous_cols + cyclical_cols
 target_col = "AQI"
 
 # ===============================
-# 3️⃣ Train/Test Split (Per Station, Chronological)
+# Train/Test Split (Per Station, Chronological)
 # ===============================
 
 train_ratio = 0.8
@@ -48,7 +48,7 @@ test_df  = pd.concat(test_parts).reset_index(drop=True)
 
 
 # ===============================
-# 4️⃣ Scaling (NO LEAKAGE)
+# Scaling (NO LEAKAGE)
 # ===============================
 
 scaler_X = StandardScaler()
@@ -64,7 +64,7 @@ test_df[feature_cols] = scaler_X.transform(test_df[feature_cols])
 
 
 # ===============================
-# 5️⃣ Sequence Creation
+# Sequence Creation
 # ===============================
 
 def create_sequences(df, feature_cols, target_col,
@@ -97,7 +97,7 @@ def create_sequences(df, feature_cols, target_col,
     return X, X_station, y
 
 # ===============================
-# 6️⃣ Create Final Train/Test Arrays
+#  Create Final Train/Test Arrays
 # ===============================
 
 look_back  = 24
@@ -141,7 +141,7 @@ x = layers.LSTM(
     128,
     return_sequences=True
 )(x)
-x = layers.LSTM(64, dropout=0.2, return_sequences=False)(x)
+x = layers.LSTM(128, dropout=0.0, return_sequences=False)(x)
 
 # ---- Bottleneck ----
 # bottleneck = layers.Dense(64, activation="relu")(encoder)
@@ -173,6 +173,7 @@ model = keras.Model(
 model.compile(
     optimizer=keras.optimizers.Adam(learning_rate=0.001),
     loss=keras.losses.Huber(delta=20),
+    # loss="mse",
     metrics=[keras.metrics.RootMeanSquaredError()]
 )
 
@@ -289,9 +290,9 @@ plt.legend()
 plt.grid(True)
 plt.show()
 
-# print("--- MODEL INPUT FEATURES REQUIRED ---")
-# for i, col in enumerate(feature_cols):
-#     print(f"Feature {i}: {col}")
+print("--- MODEL INPUT FEATURES REQUIRED ---")
+for i, col in enumerate(feature_cols):
+    print(f"Feature {i}: {col}")
 
 # print("\n--- INPUT SHAPES ---")
 # print(f"Main Features: (Batch_Size, {look_back}, {len(feature_cols)})")
