@@ -45,3 +45,8 @@ ors-docker/**
 python_research/no-use
 python_research/models/data_fetch.py
 python_research/data/city_hour.csv
+python_research/models/.cache.sqlite
+pycache/
+__pycache__/
+python_research/models/data_aqi_final.py
+python_research/models/durgapur_30day_aqi.csv
