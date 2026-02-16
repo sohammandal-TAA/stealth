@@ -1,7 +1,8 @@
+import logging
 import os
 from fastapi import APIRouter, HTTPException
 from python_research.schemas.schema import JavaRouteRequest, ForecastRequest, ForecastResponse
-from python_research.services.aqi_engine import fetch_google_aqi_profile, interpolate_pollutants, fetch_google_weather_history, fetch_google_aqi_history
+from python_research.services.aqi_engine import fetch_google_aqi_profile, get_aqi_info, get_multi_station_forecast, interpolate_pollutants, fetch_google_weather_history, fetch_google_aqi_history
 import numpy as np
 from datetime import datetime, timedelta
 
@@ -12,8 +13,13 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 async def analyze_routes(data: JavaRouteRequest):
     print(f"DEBUG: Processing {data.routeCount} routes", flush=True)
     
-    start_p = fetch_google_aqi_profile(data.start_loc[0], data.start_loc[1], GOOGLE_API_KEY)
-    end_p = fetch_google_aqi_profile(data.end_loc[0], data.end_loc[1], GOOGLE_API_KEY)
+    # 1. Handle API Failures for Start/End points
+    try:
+        start_p = fetch_google_aqi_profile(data.start_loc[0], data.start_loc[1], GOOGLE_API_KEY)
+        end_p = fetch_google_aqi_profile(data.end_loc[0], data.end_loc[1], GOOGLE_API_KEY)
+    except Exception as e:
+        logging.error(f"Google API Error: {e}")
+        raise HTTPException(status_code=503, detail="Air Quality Service temporarily unavailable")
     
     comparisons = {}
     for i, route in enumerate(data.routes):
@@ -30,21 +36,6 @@ async def analyze_routes(data: JavaRouteRequest):
     return {"status": "success", 
             "ground_truth": {"start_point": start_p, "end_point": end_p},
             "route_analysis": comparisons}
-
-# @router.post("/predict-forecast", response_model=ForecastResponse)
-# async def predict_forecast(data: ForecastRequest):
-#     # For hackathon: simulate fetching last 24h of 16 features from Google/DB
-#     # In production, replace with real 24x16 matrix fetch
-#     dummy_history = np.random.rand(24, 16) 
-    
-#     predictions = get_lstm_forecast(dummy_history, data.station_id)
-    
-#     return {
-#         "status": "success",
-#         "next_hour_prediction": round(predictions[0], 2),
-#         "twelve_hour_forecast": [round(p, 2) for p in predictions],
-#         "message": "Pollution spike expected" if predictions[-1] > predictions[0] else "Stable conditions"
-#     }
 
 
 @router.post("/history_data_all")
@@ -97,3 +88,75 @@ async def history_data_all(data: ForecastRequest):
     except Exception as e:
         print(f"ERROR: Combined History failed: {str(e)}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
+@router.post("/predict-all-stations")
+async def predict_all_stations(data: ForecastRequest):
+    try:
+        # Step 1: Fetch Real History (Google API logic)
+        weather_res = fetch_google_weather_history(data.lat, data.lon, GOOGLE_API_KEY)
+        aqi_res = fetch_google_aqi_history(data.lat, data.lon, GOOGLE_API_KEY)
+        
+        # Step 2: Sync & Clean
+        combined_history = []
+        limit = min(len(weather_res["history"]), len(aqi_res["history"]))
+        
+        for i in range(limit):
+            w = weather_res["history"][i]
+            a = aqi_res["history"][i]
+            combined_history.append({
+                "pm2_5": a.get("pm25", 0), "pm10": a.get("pm10", 0),
+                "no2": a.get("no2", 0), "co": a.get("co", 0),
+                "so2": a.get("so2", 0), "o3": a.get("o3", 0),
+                "temp_c": w.get("temp_c", 0), "wind": w.get("wind", 0),
+                "humidity": w.get("humidity", 0)
+            })
+
+        if len(combined_history) < 24:
+            return {"status": "error", "message": "Google provided less than 24h data"}
+
+        # --- DIMAAG WALA STEP: SYNC TIME WITH HISTORY ---
+        # 1. Google ke last history point ka time lo (UTC format mein hota hai)
+        last_history_time_str = aqi_res["history"][-1]["time"] 
+        # 2. Parse UTC and convert to IST (+5:30)
+        utc_anchor = datetime.fromisoformat(last_history_time_str.replace("Z", "+00:00"))
+        ist_anchor = utc_anchor + timedelta(hours=5, minutes=30)
+
+        # Step 3: Inference for all stations
+        raw_forecasts = get_multi_station_forecast(combined_history)
+
+        # Step 4: Time Labels generate karo (Forecast starts from the NEXT hour)
+        time_labels = []
+        for h in range(1, len(raw_forecasts["station_0"]) + 1):
+            future_time = ist_anchor + timedelta(hours=h)
+            time_labels.append(future_time.strftime("%I:%M %p")) # Format: 02:00 PM
+
+        # Step 5: Merge Predictions with Time Labels
+        final_forecast_data = {}
+        for station_id, aqi_values in raw_forecasts.items():
+            station_list = []
+            for i in range(len(aqi_values)):
+                val = round(aqi_values[i], 2)
+                # Har point ke liye health info attach karo
+                station_list.append({
+                    "time": time_labels[i],
+                    "aqi": val,
+                    "health_info": get_aqi_info(val) # <--- Frontend will use this
+                })
+            final_forecast_data[station_id] = station_list
+
+        # Step 6: Frontend Response
+        return {
+            "status": "success",
+            "lat": data.lat,
+            "lon": data.lon,
+            "forecast_data": final_forecast_data,
+            "meta": {
+                "unit": "AQI",
+                "history_ended_at": ist_anchor.strftime("%Y-%m-%d %H:%M:%S"),
+                "forecast_start": time_labels[0],
+                "forecast_window": f"{len(time_labels)} hours"
+            }
+        }
+
+    except Exception as e:
+        print(f"CRITICAL ERROR: {str(e)}")
+        return {"status": "error", "message": f"Pipeline Failure: {str(e)}"}

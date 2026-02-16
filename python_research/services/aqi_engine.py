@@ -2,11 +2,34 @@ import numpy as np
 import os
 import requests
 from pykrige.ok import OrdinaryKriging
+import tensorflow as tf
+import joblib
 from dotenv import load_dotenv, dotenv_values
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(os.path.dirname(current_dir)) 
+parent_dir = os.path.dirname(current_dir)
 env_path = os.path.join(root_dir, '.env')
+
+
+# Models folder ka path
+# Final paths pointing to the correct internal models folder
+model_path_str = os.path.join(parent_dir, "models", "durgapur_aqi_v1.h5")
+scaler_path_str = os.path.join(parent_dir, "models", "scaler_x.pkl")
+
+# --- 2. LOAD OBJECTS ---
+try:
+    if not os.path.exists(model_path_str):
+        raise FileNotFoundError(f"Missing Model at: {model_path_str}")
+        
+    lstm_model = tf.keras.models.load_model(model_path_str)
+    loaded_scaler = joblib.load(scaler_path_str)
+    print(f" SUCCESS: Loaded from {model_path_str}")
+except Exception as e:
+    print(f"CRITICAL ERROR: {e}")
+    lstm_model = None
+    loaded_scaler = None
+
 
 # Method 1: load_dotenv
 load_dotenv(dotenv_path=env_path,override=True)
@@ -173,3 +196,56 @@ def fetch_google_aqi_history(lat, lon, api_key=None):
     except Exception as e:
         print(f"⚠️ AQI History Fetch Failed for ({lat}, {lon}): {e}", flush=True)
         return {"lat": lat, "lon": lon, "error": str(e)}
+    
+def get_multi_station_forecast(combined_history_list):
+    """
+    Input: List of 24 dicts (Combined AQI + Weather)
+    Output: Cleaned predictions for 4 stations
+    """
+    # 1. Feature Alignment (Exactly 16 columns)
+    feature_matrix = []
+    for h in combined_history_list:
+        # Order must match your Training Data!
+        row = [
+            h.get("pm2_5", 0), h.get("pm10", 0), h.get("no2", 0), 
+            h.get("co", 0), h.get("so2", 0), h.get("o3", 0),
+            h.get("temp_c", 0), h.get("wind", 0), h.get("humidity", 0),
+            0, 0, 0, 0, 0, 0, 0 # Padding for 16 features
+        ]
+        feature_matrix.append(row)
+    
+    # 2. Scaling (The "Middle" Step)
+    # Scaler expects (N, 16), returns (N, 16)
+    scaled_matrix = loaded_scaler.transform(np.array(feature_matrix))
+    
+    # 3. Reshape for LSTM (1 Batch, 24 Timesteps, 16 Features)
+    lstm_input = scaled_matrix.reshape(1, 24, 16)
+    
+    all_results = {}
+    
+    # 4. Predict for all 4 stations
+    for s_id in range(4):
+        station_input = np.array([[s_id]])
+        # Prediction output is usually (1, 24) or (1, 12)
+        raw_pred = lstm_model.predict([lstm_input, station_input], verbose=0)
+        all_results[f"station_{s_id}"] = [round(float(p), 2) for p in raw_pred[0]]
+        
+    return all_results
+
+
+def get_aqi_info(aqi):
+    """
+    Standard Indian AQI Color Mapping for Frontend
+    """
+    if aqi <= 50:
+        return {"category": "Good", "color": "#00E400"}       # Green
+    elif aqi <= 100:
+        return {"category": "Satisfactory", "color": "#FFFF00"} # Yellow
+    elif aqi <= 200:
+        return {"category": "Moderate", "color": "#FF7E00"}     # Orange
+    elif aqi <= 300:
+        return {"category": "Poor", "color": "#FF0000"}         # Red
+    elif aqi <= 400:
+        return {"category": "Very Poor", "color": "#8F3F97"}    # Purple
+    else:
+        return {"category": "Severe", "color": "#7E0023"}
