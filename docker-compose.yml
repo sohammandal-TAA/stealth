@@ -17,6 +17,8 @@ services:
       retries: 5
     networks:
       - stealth-net
+    volumes:
+      - db_data:/var/lib/postgresql/data
 
   ai-service:
     build:
@@ -28,7 +30,7 @@ services:
         COPY requirements.txt .
         RUN pip install --no-cache-dir -r requirements.txt
         COPY python_research/models/aqi_calculate.py .
-        COPY .env . 
+        # Do not copy .env inside the image; use the environment block below
         EXPOSE 8000
         CMD ["uvicorn", "aqi_calculate:app", "--host", "0.0.0.0", "--port", "8000"]
     container_name: ai-service
@@ -48,15 +50,19 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - SPRING_DATASOURCE_URL=${DB_URL}
+      # Use the container name 'postgres' instead of localhost
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/stealth_db
       - SPRING_DATASOURCE_USERNAME=${DB_USERNAME}
       - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
-      - JWT_SECRET=${JWT_SECRET}
-      - APP_AI_SERVICE_URL=${AI_SERVICE_URL}
+      # Use the container name 'ai-service'
+      - APP_AI_SERVICE_URL=http://ai-service:8000
     networks:
       - stealth-net
 
 networks:
   stealth-net:
     driver: bridge
+
+volumes:
+  db_data:

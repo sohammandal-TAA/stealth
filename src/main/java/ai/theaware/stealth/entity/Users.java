@@ -16,11 +16,14 @@ import lombok.Data;
 public class Users {
 
     @Id
-    @Column(nullable = false, length = 50)
-    private String username;
-    
+    @Column(nullable = false, length = 100)
+    private String email; 
+
     @Column(nullable = false)
-    private String password; 
+    private String fullName;
+
+    @Column(columnDefinition = "TEXT")
+    private String avatarUrl;
 
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL)
     private List<Route> routes;
