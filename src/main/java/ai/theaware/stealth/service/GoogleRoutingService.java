@@ -56,9 +56,9 @@ public class GoogleRoutingService {
         this.geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
     }
 
-    @Cacheable(value = "aqi_routes", key = "{#sLat, #sLon, #dLat, #dLon, #user.username}")
+    @Cacheable(value = "aqi_routes", key = "{#sLat, #sLon, #dLat, #dLon, #user.email}")
     public Object processRoute(Double sLat, Double sLon, Double dLat, Double dLon, Users user) {
-        System.out.println("⏳ [CACHE MISS] Processing fresh request for user: " + user.getUsername());
+        System.out.println("[CACHE MISS] Processing fresh request for user: " + user.getEmail());
         
         try {
             GeoApiContext context = new GeoApiContext.Builder().apiKey(apiKey).build();
@@ -121,11 +121,11 @@ public class GoogleRoutingService {
                 lastEntry.get().getEndLon().equals(dLon);
 
         if (isDuplicate) {
-            System.out.println("Route already exists in history for " + user.getUsername() + ". Skipping DB save.");
+            System.out.println("Route already exists in history for " + user.getEmail() + ". Skipping DB save.");
         } else {
             try {
                 saveToDatabase(sLat, sLon, dLat, dLon, user, primaryRoute);
-                System.out.println("Successfully logged history for " + user.getUsername());
+                System.out.println("Successfully logged history for " + user.getEmail());
             } catch (Exception e) {
                 System.err.println("History save failed: " + e.getMessage());
             }

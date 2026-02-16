@@ -21,7 +21,7 @@ public class Route {
     private Long id;
 
     @ManyToOne
-    @JoinColumn(name = "username", nullable = false) 
+    @JoinColumn(name = "user_email", nullable = false)
     private Users user;
 
     private Double startLat;

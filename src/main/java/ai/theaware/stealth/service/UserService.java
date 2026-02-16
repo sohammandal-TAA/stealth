@@ -1,6 +1,5 @@
 package ai.theaware.stealth.service;
 
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import ai.theaware.stealth.entity.Users;
@@ -10,21 +9,22 @@ import ai.theaware.stealth.repository.UserRepository;
 public class UserService {
 
     private final UserRepository userRepository;
-    private final PasswordEncoder passwordEncoder;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+    public UserService(UserRepository userRepository) {
         this.userRepository = userRepository;
-        this.passwordEncoder = passwordEncoder;
     }
 
-    public Users registerUser(String username, String password) {
-        if (userRepository.findByUsername(username).isPresent()) {
-            throw new RuntimeException("Username already exists");
-        }
+    public Users findByEmail(String email) {
+        return userRepository.findById(email)
+                .orElseThrow(() -> new RuntimeException("User not found: " + email));
+    }
 
-        Users user = new Users();
-        user.setUsername(username);
-        user.setPassword(passwordEncoder.encode(password)); 
+    public Users updateOrCreateUser(String email, String name, String avatarUrl) {
+        Users user = userRepository.findById(email).orElse(new Users());
+        
+        user.setEmail(email);
+        user.setFullName(name);
+        user.setAvatarUrl(avatarUrl);
         
         return userRepository.save(user);
     }
