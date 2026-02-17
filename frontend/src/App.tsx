@@ -52,9 +52,13 @@ const App: React.FC = () => {
           </nav>
 
           <div className="flex items-center gap-2">
-            <button type="button" className="secondary-cta hidden px-4 py-2 text-xs sm:inline-flex">
+            <a
+              href="http://localhost:8080/oauth2/authorization/google"
+              className="secondary-cta hidden px-4 py-2 text-xs sm:inline-flex"
+              aria-label="Log in with Google"
+            >
               Log In
-            </button>
+            </a>
             <button type="button" className="primary-cta px-4 py-2 text-xs">
               Get Started
             </button>
