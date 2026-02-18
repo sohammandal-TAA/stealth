@@ -7,6 +7,7 @@ interface TopbarProps {
 
   // 🔥 Now we send placeId instead of plain string
   onSearchDestination?: (placeId: string, description: string) => void;
+  onLogoClick?: () => void;
 }
 
 const Topbar: React.FC<TopbarProps> = ({
@@ -14,6 +15,7 @@ const Topbar: React.FC<TopbarProps> = ({
   onToggleTheme,
   userName,
   onSearchDestination,
+  onLogoClick,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [suggestions, setSuggestions] = useState<
@@ -100,7 +102,7 @@ const Topbar: React.FC<TopbarProps> = ({
 
   return (
     <header className="dashboard-topbar">
-      <div className="dashboard-topbar-left">
+      <div className="dashboard-topbar-left" onClick={onLogoClick} style={{ cursor: 'pointer' }}>
         <div className="dashboard-logo-mark">🌿</div>
         <div className="dashboard-logo-text">
           <span className="brand">EcoRoute</span>

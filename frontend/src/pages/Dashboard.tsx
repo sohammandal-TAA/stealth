@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Topbar from '../components/dashboard/Topbar';
 import NavigationMap from '../components/dashboard/NavigationMap';
 import AlternativeRoutes from '../components/dashboard/AlternativeRoutes';
@@ -10,6 +11,7 @@ import type { ForecastBar, RouteOption, SensorData } from '../components/dashboa
 import '../styles/dashboard.css';
 
 const Dashboard: React.FC = () => {
+  const navigate = useNavigate();
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
   const [userName, setUserName] = useState<string>('Guest');
@@ -87,6 +89,10 @@ const Dashboard: React.FC = () => {
     return () => clearTimeout(timeout);
   }, [originCoords, destinationCoords]);
 
+  // 🔥 Handle logo click to redirect to landing page
+  const handleLogoClick = useCallback(() => {
+    navigate('/');
+  }, [navigate]);
 
   const handleSearchDestination = useCallback(async (
     placeIdOrQuery: string,
@@ -154,6 +160,7 @@ const Dashboard: React.FC = () => {
         onToggleTheme={() => setIsDarkMode((prev) => !prev)}
         userName={userName}
         onSearchDestination={handleSearchDestination}
+        onLogoClick={handleLogoClick}
       />
 
       <NavigationMap
