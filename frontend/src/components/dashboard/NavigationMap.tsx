@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   GoogleMap,
   useJsApiLoader,
@@ -17,13 +17,6 @@ const mapContainerStyle = {
   height: '400px',
 };
 
-const DEFAULT_DESTINATION = {
-  lat: 23.5441,
-  lng: 87.3025,
-};
-
-const libraries: ("geometry")[] = ["geometry"];
-
 const NavigationMap: React.FC<NavigationMapProps> = ({
   isDarkMode,
   onRouteCalculated,
@@ -37,6 +30,7 @@ const NavigationMap: React.FC<NavigationMapProps> = ({
 
   const mapRef = useRef<google.maps.Map | null>(null);
   const markerRef = useRef<google.maps.Marker | null>(null);
+  const destinationMarkerRef = useRef<google.maps.Marker | null>(null); // ✅ ADDED
 
   const [currentLocation, setCurrentLocation] =
     useState<google.maps.LatLngLiteral | null>(null);
@@ -47,7 +41,7 @@ const NavigationMap: React.FC<NavigationMapProps> = ({
   const [zoom, setZoom] = useState(15);
 
   // ---------------------------
-  // GEOLOCATION (optimized)
+  // GEOLOCATION
   // ---------------------------
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -74,15 +68,14 @@ const NavigationMap: React.FC<NavigationMapProps> = ({
   // ---------------------------
   const requestRoute = useCallback(
     (origin: google.maps.LatLngLiteral) => {
-      if (!window.google) return;
+      if (!window.google || !destinationOverride) return;
 
       const service = new window.google.maps.DirectionsService();
-      const destination = destinationOverride || DEFAULT_DESTINATION;
 
       service.route(
         {
           origin,
-          destination,
+          destination: destinationOverride,
           travelMode: window.google.maps.TravelMode.DRIVING,
         },
         (result, status) => {
@@ -101,15 +94,14 @@ const NavigationMap: React.FC<NavigationMapProps> = ({
     [destinationOverride, onRouteCalculated]
   );
 
-  // 🔥 Recalculate route when destination changes
+  // 🔥 Only calculate route when both exist
   useEffect(() => {
-    if (currentLocation) {
-      requestRoute(currentLocation);
-    }
+    if (!currentLocation || !destinationOverride) return;
+    requestRoute(currentLocation);
   }, [currentLocation, destinationOverride]);
 
   // ---------------------------
-  // MARKER (no re-render spam)
+  // USER BLUE DOT MARKER
   // ---------------------------
   useEffect(() => {
     if (!mapRef.current || !currentLocation || !window.google) return;
@@ -118,27 +110,52 @@ const NavigationMap: React.FC<NavigationMapProps> = ({
       markerRef.current = new window.google.maps.Marker({
         position: currentLocation,
         map: mapRef.current,
+        icon: {
+          path: window.google.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: "#4285F4",
+          fillOpacity: 1,
+          strokeColor: "#FFFFFF",
+          strokeWeight: 3,
+        },
+        zIndex: 999,
       });
     } else {
       markerRef.current.setPosition(currentLocation);
     }
 
-    // 🔥 Only pan, don't force zoom every time
     mapRef.current.panTo(currentLocation);
   }, [currentLocation]);
+
+  // ---------------------------
+  // DESTINATION RED MARKER
+  // ---------------------------
+  useEffect(() => {
+    if (!mapRef.current || !destinationOverride || !window.google) return;
+
+    if (!destinationMarkerRef.current) {
+      destinationMarkerRef.current = new window.google.maps.Marker({
+        position: destinationOverride,
+        map: mapRef.current,
+      });
+    } else {
+      destinationMarkerRef.current.setPosition(destinationOverride);
+    }
+  }, [destinationOverride]);
 
   const onLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
   }, []);
 
-  const mapCenter = currentLocation || destinationOverride || DEFAULT_DESTINATION;
-
-  if (!isLoaded) return <p>Loading Map...</p>;
+  // Prevent center error
+  if (!isLoaded || !currentLocation) {
+    return <p>Loading Map...</p>;
+  }
 
   return (
     <GoogleMap
       mapContainerStyle={mapContainerStyle}
-      center={mapCenter}
+      center={currentLocation}
       zoom={zoom}
       onLoad={onLoad}
       options={{
