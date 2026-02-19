@@ -1,9 +1,15 @@
+import logging
 import numpy as np
 import os
 import requests
 from pykrige.ok import OrdinaryKriging
 import tensorflow as tf
 import joblib
+import httpx
+import asyncio
+import math
+
+http_client = httpx.AsyncClient(timeout=5)
 from dotenv import load_dotenv, dotenv_values
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -34,9 +40,13 @@ except Exception as e:
 # Method 1: load_dotenv
 load_dotenv(dotenv_path=env_path,override=True)
 
-# Method 2: Manual Parse (Back-up)
-env_vars = dotenv_values(env_path)
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or env_vars.get("GOOGLE_API_KEY")
+# # Method 2: Manual Parse (Back-up)
+# env_vars = dotenv_values(env_path)
+# GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or env_vars.get("GOOGLE_API_KEY")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY")
+# logging.info(f"GOOGLE_API_KEY Loaded: {'Yes' if GOOGLE_API_KEY else 'No'}")
+# print("DEBUG API KEY:", GOOGLE_API_KEY)
+
 
 # if GOOGLE_API_KEY:
 #     print(f"✅ SUCCESS: Key found! (Starts with: {GOOGLE_API_KEY[:4]})", flush=True)
@@ -106,7 +116,7 @@ def interpolate_pollutants(start_data, end_data, route_points):
             
     return route_profiles
 
-def fetch_google_weather_history(lat, lon, api_key=None):
+async def fetch_google_weather_history(lat, lon, http_client, api_key=None):
     # Use the passed key, or fallback to your global variable
     key = api_key or GOOGLE_API_KEY
     
@@ -124,7 +134,8 @@ def fetch_google_weather_history(lat, lon, api_key=None):
     }
     
     try:
-        response = requests.get(url, params=params, timeout=5)
+        
+        response = await http_client.get(url, params=params)
         response.raise_for_status()
         data = response.json()
         
@@ -148,7 +159,7 @@ def fetch_google_weather_history(lat, lon, api_key=None):
         return {"lat": lat, "lon": lon, "error": str(e)}
 
 
-def fetch_google_aqi_history(lat, lon, api_key=None):
+async def fetch_google_aqi_history(lat, lon, http_client, api_key=None):
     key = api_key or GOOGLE_API_KEY
     
     # Endpoint for historical lookups
@@ -164,7 +175,7 @@ def fetch_google_aqi_history(lat, lon, api_key=None):
     }
     
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = await http_client.post(url, json=payload)
         response.raise_for_status()
         data = response.json()
         
@@ -199,37 +210,45 @@ def fetch_google_aqi_history(lat, lon, api_key=None):
     
 def get_multi_station_forecast(combined_history_list):
     """
-    Input: List of 24 dicts (Combined AQI + Weather)
-    Output: Cleaned predictions for 4 stations
+    Input: 24 combined history dicts
+    Output: Predictions for 4 stations (single forward pass)
     """
-    # 1. Feature Alignment (Exactly 16 columns)
-    feature_matrix = []
-    for h in combined_history_list:
-        # Order must match your Training Data!
-        row = [
-            h.get("pm2_5", 0), h.get("pm10", 0), h.get("no2", 0), 
+
+    # 1️⃣ Feature Alignment (Vectorized)
+    feature_matrix = np.array([
+        [
+            h.get("pm2_5", 0), h.get("pm10", 0), h.get("no2", 0),
             h.get("co", 0), h.get("so2", 0), h.get("o3", 0),
             h.get("temp_c", 0), h.get("wind", 0), h.get("humidity", 0),
-            0, 0, 0, 0, 0, 0, 0 # Padding for 16 features
+            0, 0, 0, 0, 0, 0, 0
         ]
-        feature_matrix.append(row)
-    
-    # 2. Scaling (The "Middle" Step)
-    # Scaler expects (N, 16), returns (N, 16)
-    scaled_matrix = loaded_scaler.transform(np.array(feature_matrix))
-    
-    # 3. Reshape for LSTM (1 Batch, 24 Timesteps, 16 Features)
+        for h in combined_history_list
+    ], dtype=float)
+
+    # 2️⃣ Scale once
+    scaled_matrix = loaded_scaler.transform(feature_matrix)
+
+    # 3️⃣ Reshape for LSTM
     lstm_input = scaled_matrix.reshape(1, 24, 16)
-    
+
+    # 4️⃣ Batch station IDs (VERY IMPORTANT)
+    station_ids = np.array([[0], [1], [2], [3]])  # shape (4,1)
+
+    # Repeat input 4 times (batch size = 4)
+    lstm_batch = np.repeat(lstm_input, 4, axis=0)
+
+    # 5️⃣ Single Forward Pass
+    raw_pred = lstm_model.predict([lstm_batch, station_ids], verbose=0)
+
+    # raw_pred shape: (4, forecast_steps)
+
     all_results = {}
-    
-    # 4. Predict for all 4 stations
-    for s_id in range(4):
-        station_input = np.array([[s_id]])
-        # Prediction output is usually (1, 24) or (1, 12)
-        raw_pred = lstm_model.predict([lstm_input, station_input], verbose=0)
-        all_results[f"station_{s_id}"] = [round(float(p), 2) for p in raw_pred[0]]
-        
+
+    for i in range(4):
+        all_results[f"station_{i}"] = [
+            round(float(p), 2) for p in raw_pred[i]
+        ]
+
     return all_results
 
 
@@ -249,3 +268,34 @@ def get_aqi_info(aqi):
         return {"category": "Very Poor", "color": "#8F3F97"}    # Purple
     else:
         return {"category": "Severe", "color": "#7E0023"}
+    
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(dlat/2)**2 +
+        math.cos(math.radians(lat1)) *
+        math.cos(math.radians(lat2)) *
+        math.sin(dlon/2)**2
+    )
+
+    return 2 * R * math.asin(math.sqrt(a))
+
+def weighted_average(aqiA, aqiB, lat, lon,
+                     latA, lonA, latB, lonB):
+
+    dA = haversine(lat, lon, latA, lonA)
+    dB = haversine(lat, lon, latB, lonB)
+
+    if dA == 0:
+        return aqiA
+    if dB == 0:
+        return aqiB
+
+    wA = 1 / dA
+    wB = 1 / dB
+
+    return (aqiA * wA + aqiB * wB) / (wA + wB)

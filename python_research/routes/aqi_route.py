@@ -1,14 +1,37 @@
+import asyncio
 import logging
 import os
 from fastapi import APIRouter, HTTPException
-from python_research.schemas.schema import JavaRouteRequest, ForecastRequest, ForecastResponse
-from python_research.services.aqi_engine import fetch_google_aqi_profile, get_aqi_info, get_multi_station_forecast, interpolate_pollutants, fetch_google_weather_history, fetch_google_aqi_history
+from python_research.schemas.schema import JavaRouteRequest, ForecastRequest, ForecastResponse, RouteRequest
+from python_research.services.aqi_engine import fetch_google_aqi_profile, get_aqi_info, get_multi_station_forecast, haversine, interpolate_pollutants, fetch_google_weather_history, fetch_google_aqi_history, weighted_average
 import numpy as np
 from datetime import datetime, timedelta
+import httpx
+http_client = httpx.AsyncClient(timeout=5)
 
 router = APIRouter()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+# Fixed Station Coordinates
+STATIONS = {
+    "station_0": {"lat": 23.51905342888936, "lon": 87.34565136450719},
+    "station_1": {"lat": 23.564018931392827, "lon": 87.31123928017463},
+    "station_2": {"lat": 23.5391718044899, "lon": 87.30401858752859},
+    "station_3": {"lat": 23.554806202241476, "lon": 87.24681601086061},
+}
+
+def find_nearest_station(lat, lon):
+    min_dist = float("inf")
+    nearest_station = None
+
+    for station_id, coords in STATIONS.items():
+        d = haversine(lat, lon, coords["lat"], coords["lon"])
+        if d < min_dist:
+            min_dist = d
+            nearest_station = station_id
+
+    return nearest_station
+    
 @router.post("/analyze-routes")
 async def analyze_routes(data: JavaRouteRequest):
     print(f"DEBUG: Processing {data.routeCount} routes", flush=True)
@@ -39,123 +62,205 @@ async def analyze_routes(data: JavaRouteRequest):
 
 
 @router.post("/history_data_all")
-async def history_data_all(data: ForecastRequest):
-    print(f"DEBUG: Aggregating 24h history for Lat: {data.lat}, Lon: {data.lon}", flush=True)
-    
+async def history_data_all():
     try:
-        # 1. Fetch both histories
-        # Make sure the pollutant code for PM2.5 in your helper matches 'pm25' from API
-        weather_res = fetch_google_weather_history(data.lat, data.lon, GOOGLE_API_KEY)
-        aqi_res = fetch_google_aqi_history(data.lat, data.lon, GOOGLE_API_KEY)
-        
-        if "error" in weather_res:
-            raise HTTPException(status_code=500, detail=f"Weather API: {weather_res['error']}")
-        if "error" in aqi_res:
-            raise HTTPException(status_code=500, detail=f"AQI API: {aqi_res['error']}")
+        async def process_station(station_id, coords):
+            try:
+                # Fetch weather + AQI in parallel
+                weather_task = fetch_google_weather_history(
+                    coords["lat"], coords["lon"], http_client
+                )
 
-        # 2. Synchronize and format the data
-        # We assume both APIs return 24 hours. We'll zip them to align by time.
-        combined_history = []
-        
-        # Google APIs usually return data from oldest to newest or vice-versa.
-        # We pair them index by index.
-        for w_hour, a_hour in zip(weather_res["history"], aqi_res["history"]):
-            utc_time = datetime.fromisoformat(a_hour["time"].replace("Z", "+00:00"))
-            ist_time = utc_time + timedelta(hours=5, minutes=30)
-            readable_ist = ist_time.strftime("%Y-%m-%d %H:%M:%S")
-            combined_history.append({
-                "time": readable_ist,
-                # Pollutants
-                "pm2_5": a_hour.get("pm25", 0), 
-                "pm10": a_hour.get("pm10", 0),
-                "no2": a_hour.get("no2", 0),
-                "co": a_hour.get("co", 0),
-                "so2": a_hour.get("so2", 0),
-                "o3": a_hour.get("o3", 0),
-                # Weather - FIXED KEYS BELOW
-                "temp_c": w_hour.get("temp_c", 0),   
-                "wind": w_hour.get("wind", 0),       
-                "humidity": w_hour.get("humidity", 0)
-            })
+                aqi_task = fetch_google_aqi_history(
+                    coords["lat"], coords["lon"], http_client
+                )
+
+                weather_res, aqi_res = await asyncio.gather(
+                    weather_task, aqi_task
+                )
+
+                # Basic API failure check
+                if "error" in weather_res or "error" in aqi_res:
+                    print(f"API error for station {station_id}", flush=True)
+                    return station_id, {"error": "API failure"}
+
+                combined_history = []
+
+                for w, a in zip(weather_res.get("history", []),
+                                aqi_res.get("history", [])):
+
+                    combined_history.append({
+                        "time": a.get("time"),
+                        "pm2_5": a.get("pm25", 0),
+                        "pm10": a.get("pm10", 0),
+                        "no2": a.get("no2", 0),
+                        "co": a.get("co", 0),
+                        "so2": a.get("so2", 0),
+                        "o3": a.get("o3", 0),
+                        "temp_c": w.get("temp_c", 0),
+                        "wind": w.get("wind", 0),
+                        "humidity": w.get("humidity", 0)
+                    })
+
+                return station_id, {
+                    "location": coords,
+                    "history_count": len(combined_history),
+                    "data": combined_history
+                }
+
+            except Exception as e:
+                print(f"Station processing failed: {station_id} | {str(e)}", flush=True)
+                return station_id, {"error": str(e)}
+
+        tasks = [
+            process_station(station_id, coords)
+            for station_id, coords in STATIONS.items()
+        ]
+
+        results = await asyncio.gather(*tasks)
 
         return {
             "status": "success",
-            "location": {"lat": data.lat, "lon": data.lon},
-            "history_count": len(combined_history),
-            "data": combined_history
+            "data": dict(results)
         }
 
     except Exception as e:
-        print(f"ERROR: Combined History failed: {str(e)}", flush=True)
+        print(f"history_data_all failed: {str(e)}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/predict-all-stations")
-async def predict_all_stations(data: ForecastRequest):
+async def predict_all_stations(data: RouteRequest):
+    print(f"DEBUG: Starting multi-station forecast", flush=True)
     try:
-        # Step 1: Fetch Real History (Google API logic)
-        weather_res = fetch_google_weather_history(data.lat, data.lon, GOOGLE_API_KEY)
-        aqi_res = fetch_google_aqi_history(data.lat, data.lon, GOOGLE_API_KEY)
-        
-        # Step 2: Sync & Clean
+        # ---- Step 1: Fetch weather + AQI in parallel for ALL stations ----
+
+        async def fetch_station_data(station_id, coords):
+            weather_task = fetch_google_weather_history(
+                coords["lat"], coords["lon"], http_client
+            )
+            aqi_task = fetch_google_aqi_history(
+                coords["lat"], coords["lon"], http_client
+            )
+
+            weather_res, aqi_res = await asyncio.gather(
+                weather_task, aqi_task
+            )
+
+            return station_id, weather_res, aqi_res
+
+        fetch_tasks = [
+            fetch_station_data(station_id, coords)
+            for station_id, coords in STATIONS.items()
+        ]
+
+        station_results = await asyncio.gather(*fetch_tasks)
+
+        # ---- Step 2: Use FIRST station history as base (same like old code) ----
+
+        base_station_id, weather_res, aqi_res = station_results[0]
+
+        if "error" in weather_res or "error" in aqi_res:
+            return {"status": "error", "message": "API failure"}
+
         combined_history = []
-        limit = min(len(weather_res["history"]), len(aqi_res["history"]))
-        
-        for i in range(limit):
-            w = weather_res["history"][i]
-            a = aqi_res["history"][i]
+
+        for w, a in zip(weather_res.get("history", []),
+                        aqi_res.get("history", [])):
+
             combined_history.append({
-                "pm2_5": a.get("pm25", 0), "pm10": a.get("pm10", 0),
-                "no2": a.get("no2", 0), "co": a.get("co", 0),
-                "so2": a.get("so2", 0), "o3": a.get("o3", 0),
-                "temp_c": w.get("temp_c", 0), "wind": w.get("wind", 0),
+                "pm2_5": a.get("pm25", 0),
+                "pm10": a.get("pm10", 0),
+                "no2": a.get("no2", 0),
+                "co": a.get("co", 0),
+                "so2": a.get("so2", 0),
+                "o3": a.get("o3", 0),
+                "temp_c": w.get("temp_c", 0),
+                "wind": w.get("wind", 0),
                 "humidity": w.get("humidity", 0)
             })
 
         if len(combined_history) < 24:
-            return {"status": "error", "message": "Google provided less than 24h data"}
+            return {"status": "error", "message": "Less than 24h data"}
 
-        # 1. Google ke last history point ka time lo (UTC format mein hota hai)
-        last_history_time_str = aqi_res["history"][-1]["time"] 
-        # 2. Parse UTC and convert to IST (+5:30)
-        utc_anchor = datetime.fromisoformat(last_history_time_str.replace("Z", "+00:00"))
+        # ---- Step 3: Time anchor (OLD LOGIC SAME) ----
+
+        last_history_time_str = aqi_res["history"][-1]["time"]
+        utc_anchor = datetime.fromisoformat(
+            last_history_time_str.replace("Z", "+00:00")
+        )
         ist_anchor = utc_anchor + timedelta(hours=5, minutes=30)
 
-        # Step 3: Inference for all stations
+        # ---- Step 4: Single model inference (FAST) ----
+
         raw_forecasts = get_multi_station_forecast(combined_history)
 
-        # Step 4: Time Labels generate karo (Forecast starts from the NEXT hour)
+        # ---- Step 5: Generate time labels ----
+
         time_labels = []
         for h in range(1, len(raw_forecasts["station_0"]) + 1):
             future_time = ist_anchor + timedelta(hours=h)
-            time_labels.append(future_time.strftime("%I:%M %p")) # Format: 02:00 PM
+            time_labels.append(future_time.strftime("%I:%M %p"))
 
-        # Step 5: Merge Predictions with Time Labels
+        # ---- Step 6: SAME OLD OUTPUT STRUCTURE ----
         final_forecast_data = {}
+
         for station_id, aqi_values in raw_forecasts.items():
             station_list = []
+
             for i in range(len(aqi_values)):
                 val = round(aqi_values[i], 2)
-                # Har point ke liye health info attach karo
+
                 station_list.append({
                     "time": time_labels[i],
                     "aqi": val,
-                    "health_info": get_aqi_info(val) # <--- Frontend will use this
+                    "health_info": get_aqi_info(val)
                 })
+
             final_forecast_data[station_id] = station_list
 
-        # Step 6: Frontend Response
+
+        # ---- Step 7: NEW → Route-based weighted forecast ----
+
+        start_station = find_nearest_station(data.sLat, data.sLon)
+        end_station = find_nearest_station(data.dLat, data.dLon)
+
+        route_mid_lat = (data.sLat + data.dLat) / 2
+        route_mid_lon = (data.sLon + data.dLon) / 2
+        route_forecast = []
+
+        for i in range(len(final_forecast_data[start_station])):
+
+            aqiA = final_forecast_data[start_station][i]["aqi"]
+            aqiB = final_forecast_data[end_station][i]["aqi"]
+
+            blended = weighted_average(
+                aqiA,
+                aqiB,
+                route_mid_lat,
+                route_mid_lon,
+                STATIONS[start_station]["lat"],
+                STATIONS[start_station]["lon"],
+                STATIONS[end_station]["lat"],
+                STATIONS[end_station]["lon"]
+            )
+
+            route_forecast.append({
+                "time": final_forecast_data[start_station][i]["time"],
+                "aqi": round(blended, 2),
+                "health_info": get_aqi_info(blended)
+            })
+
+
         return {
             "status": "success",
-            "lat": data.lat,
-            "lon": data.lon,
-            "forecast_data": final_forecast_data,
-            "meta": {
-                "unit": "AQI",
-                "history_ended_at": ist_anchor.strftime("%Y-%m-%d %H:%M:%S"),
-                "forecast_start": time_labels[0],
-                "forecast_window": f"{len(time_labels)} hours"
-            }
+            "forecast_data": final_forecast_data,   # OLD structure untouched
+            "route_forecast": route_forecast,       # NEW
+            "start_station": start_station,
+            "end_station": end_station
         }
+
 
     except Exception as e:
         print(f"CRITICAL ERROR: {str(e)}")
         return {"status": "error", "message": f"Pipeline Failure: {str(e)}"}
+
