@@ -15,6 +15,7 @@ const Dashboard: React.FC = () => {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
   const [userName, setUserName] = useState<string>('Guest');
+  const [selectedRoute, setSelectedRoute] = useState<number | null>(null);
   const [originCoords, setOriginCoords] = useState<google.maps.LatLngLiteral | null>(null);
   const [destinationCoords, setDestinationCoords] = useState<google.maps.LatLngLiteral | null>(null);
   const [routes, setRoutes] = useState<RouteOption[]>([]);
@@ -56,26 +57,127 @@ const Dashboard: React.FC = () => {
       const data = await response.json();
 
       // Flexible Data Hydration
-      setRoutes(data.routes || data.routeOptions || []);
+      // 1) Routes: backend may return `routes` array OR `route_analysis` object (Route_1, Route_2...)
+      let backendRoutes: any[] = [];
+      if (data.route_analysis && typeof data.route_analysis === 'object') {
+        backendRoutes = Object.keys(data.route_analysis).map((key, idx) => {
+          const entry = data.route_analysis[key];
+          const details = entry?.details ?? [];
+          const path = details
+            .map((pt: any) => {
+              const loc = pt.location;
+              if (!loc) return null;
+              // backend commonly returns [lat, lon] but be defensive and normalize
+              let a = Number(loc[0]);
+              let b = Number(loc[1]);
+              if (Number.isNaN(a) || Number.isNaN(b)) return null;
+              // detect if values look like swapped (lon, lat) by range test
+              const looksLikeLatA = Math.abs(a) <= 90;
+              const looksLikeLatB = Math.abs(b) <= 90;
+              // prefer lat in [-90,90], lon in [-180,180]
+              let lat = a, lng = b;
+              if (!looksLikeLatA && looksLikeLatB) {
+                // swap
+                lat = b;
+                lng = a;
+              }
+              return { lat: Number(lat), lng: Number(lng) };
+            })
+            .filter(Boolean);
 
-      const aq = data.airQuality ?? data.air_quality;
-      if (aq) {
+          const avgAqi = entry?.avg_exposure_aqi ?? entry?.avg_aqi ?? null;
+          const pollutionLevel = avgAqi == null ? 'medium' : (avgAqi <= 100 ? 'low' : avgAqi <= 150 ? 'medium' : 'high');
+
+          return {
+            id: key,
+            name: key,
+            // prefer backend-provided duration/distance when available
+            duration: entry?.duration ?? entry?.duration_minutes ?? entry?.duration_min ?? undefined,
+            distance: entry?.distance_human ?? entry?.distance ?? undefined,
+            pollutionLevel,
+            label: key,
+            path,
+            avgExposureAqi: avgAqi,
+          };
+        });
+      } else {
+        backendRoutes = data.routes || data.routeOptions || [];
+      }
+
+      setRoutes(backendRoutes);
+
+      // 2) Air quality: prefer ground_truth if available
+      const gtStart = data?.ground_truth?.start_point;
+      const gtEnd = data?.ground_truth?.end_point;
+      if (gtStart || gtEnd) {
+        const aqiStart = gtStart?.aqi ?? null;
+        const aqiEnd = gtEnd?.aqi ?? null;
+        const avg = aqiStart != null && aqiEnd != null ? Math.round((aqiStart + aqiEnd) / 2) : (aqiStart ?? aqiEnd ?? null);
         setAirQuality({
-          aqiIndex: aq.aqiIndex ?? aq.aqi_index ?? aq.currentAqi ?? null,
-          kgSaved: aq.kgSaved ?? aq.kg_saved ?? null,
-          goalPercent: aq.goalPercent ?? aq.goal_percent ?? null,
+          aqiIndex: avg,
+          kgSaved: null,
+          goalPercent: null,
         });
+      } else {
+        const aq = data.airQuality ?? data.air_quality;
+        if (aq) {
+          setAirQuality({
+            aqiIndex: aq.aqiIndex ?? aq.aqi_index ?? aq.currentAqi ?? null,
+            kgSaved: aq.kgSaved ?? aq.kg_saved ?? null,
+            goalPercent: aq.goalPercent ?? aq.goal_percent ?? null,
+          });
+        }
       }
 
-      const snsr = data.sensors ?? data.sensorData ?? data.sensor_data;
-      if (snsr) {
+      // 3) Sensors / pollutant mapping: prefer ground_truth start_point for pm25/pm10
+      // Also try to extract common weather fields from route_analysis details if available
+      const extractFromDetail = () => {
+        // pick first available detail point from any route_analysis entry
+        if (data.route_analysis && typeof data.route_analysis === 'object') {
+          for (const k of Object.keys(data.route_analysis)) {
+            const first = data.route_analysis[k]?.details?.[0];
+            if (first) return first;
+          }
+        }
+        return null;
+      };
+
+      const detailSample = extractFromDetail();
+
+      const pickHumidity = (obj: any) => obj?.humidity ?? obj?.hum ?? obj?.rh ?? obj?.relative_humidity ?? obj?.relativeHumidity ?? obj?.humid ?? null;
+      const pickTemp = (obj: any) => obj?.temperature ?? obj?.temp ?? obj?.temp_c ?? obj?.air_temp ?? obj?.temperature_c ?? obj?.t ?? null;
+      const pickWind = (obj: any) => obj?.windSpeed ?? obj?.wind_speed ?? obj?.wind_kph ?? obj?.wind_mps ?? obj?.wind ?? obj?.wind_m_s ?? null;
+
+      if (gtStart) {
         setSensors({
-          humidity: snsr.humidity ?? null,
-          temperature: snsr.temperature ?? null,
-          windSpeed: snsr.windSpeed ?? snsr.wind_speed ?? null,
+          humidity: pickHumidity(gtStart) ?? (detailSample ? pickHumidity(detailSample) : null),
+          temperature: pickTemp(gtStart) ?? (detailSample ? pickTemp(detailSample) : null),
+          windSpeed: pickWind(gtStart) ?? (detailSample ? pickWind(detailSample) : null),
+          pm25: gtStart.pm25 ?? gtStart.pm_2_5 ?? null,
+          pm10: gtStart.pm10 ?? gtStart.pm_10 ?? null,
         });
+      } else {
+        const snsr = data.sensors ?? data.sensorData ?? data.sensor_data;
+        if (snsr) {
+          setSensors({
+            humidity: pickHumidity(snsr) ?? (detailSample ? pickHumidity(detailSample) : null),
+            temperature: pickTemp(snsr) ?? (detailSample ? pickTemp(detailSample) : null),
+            windSpeed: pickWind(snsr) ?? (detailSample ? pickWind(detailSample) : null),
+            pm25: snsr.pm25 ?? snsr.pm_2_5 ?? snsr.pm2_5 ?? snsr.pm_2dot5 ?? null,
+            pm10: snsr.pm10 ?? snsr.pm_10 ?? snsr.pm10_ug ?? null,
+          });
+        } else if (detailSample) {
+          setSensors({
+            humidity: pickHumidity(detailSample) ?? null,
+            temperature: pickTemp(detailSample) ?? null,
+            windSpeed: pickWind(detailSample) ?? null,
+            pm25: detailSample.pm25 ?? detailSample.pm_2_5 ?? null,
+            pm10: detailSample.pm10 ?? detailSample.pm_10 ?? null,
+          });
+        }
       }
 
+      // Forecast: prefer explicit forecast arrays
       setForecast(data.forecast || data.forecastBars || []);
 
       // 🔥 Fetch AI predictions after route processing
@@ -197,6 +299,9 @@ const Dashboard: React.FC = () => {
         onRouteCalculated={setRouteInfo}
         destinationOverride={destinationCoords}
         onOriginChange={setOriginCoords} // Map updates Dashboard's originCoords in real-time
+        backendRoutes={routes}
+        selectedRouteIndex={selectedRoute}
+        onRouteSelect={setSelectedRoute}
       />
 
       <main className="dashboard-content">
@@ -205,6 +310,8 @@ const Dashboard: React.FC = () => {
             isDarkMode={isDarkMode}
             routeInfo={routeInfo}
             routes={routes}
+            selectedRouteIndex={selectedRoute}
+            onRouteSelect={setSelectedRoute}
           />
           <div className="dashboard-right-col">
             <AirQualityCard isDarkMode={isDarkMode} data={airQuality} />

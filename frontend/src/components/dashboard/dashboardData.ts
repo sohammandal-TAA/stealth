@@ -5,12 +5,17 @@ export interface RouteOption {
   distance: string;
   pollutionLevel: 'low' | 'medium' | 'high';
   label: string;
+  // optional raw path returned by backend (array of {lat,lng})
+  path?: Array<{ lat: number; lng: number }>;
+  avgExposureAqi?: number;
 }
 
 export interface SensorData {
   humidity: number;
   temperature: number;
   windSpeed: number;
+  pm25?: number | null;
+  pm10?: number | null;
 }
 
 export interface ForecastBar {

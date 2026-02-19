@@ -299,6 +299,12 @@
   border: 1px solid var(--border-subtle);
 }
 
+.route-item.route-selected {
+  background: var(--bg-surface);
+  border: 2px solid var(--accent-bright);
+  box-shadow: 0 0 12px rgba(76, 175, 80, 0.25);
+}
+
 .route-label {
   display: inline-block;
   margin-bottom: 6px;
@@ -639,4 +645,3 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
-

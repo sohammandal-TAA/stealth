@@ -32,6 +32,20 @@ const SensorReadings: React.FC<SensorReadingsProps> = ({ data }) => {
             {data?.windSpeed != null ? `${data.windSpeed}km/h` : '—'}
           </span>
         </li>
+        <li>
+          <div className="sensor-icon pm25">🟤</div>
+          <span className="sensor-label">PM2.5</span>
+          <span className="sensor-value">
+            {data?.pm25 != null ? `${data.pm25} µg/m³` : '—'}
+          </span>
+        </li>
+        <li>
+          <div className="sensor-icon pm10">⚪️</div>
+          <span className="sensor-label">PM10</span>
+          <span className="sensor-value">
+            {data?.pm10 != null ? `${data.pm10} µg/m³` : '—'}
+          </span>
+        </li>
       </ul>
     </section>
   );

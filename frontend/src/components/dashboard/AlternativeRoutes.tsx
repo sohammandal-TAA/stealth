@@ -5,9 +5,17 @@ interface AlternativeRoutesProps {
   isDarkMode: boolean;
   routeInfo: DashboardRouteInfo | null;
   routes?: RouteOption[];
+  selectedRouteIndex?: number | null;
+  onRouteSelect?: (index: number | null) => void;
 }
 
-const AlternativeRoutes: React.FC<AlternativeRoutesProps> = ({ routeInfo, routes = [] }) => {
+const AlternativeRoutes: React.FC<AlternativeRoutesProps> = ({
+  routeInfo,
+  routes = [],
+  selectedRouteIndex = null,
+  onRouteSelect,
+}) => {
+
   const badgeColor = (level: 'low' | 'medium' | 'high') => {
     if (level === 'low') return 'badge-low';
     if (level === 'medium') return 'badge-medium';
@@ -29,20 +37,36 @@ const AlternativeRoutes: React.FC<AlternativeRoutesProps> = ({ routeInfo, routes
       </header>
 
       <div className="routes-list">
-        {routes.map((route) => (
-          <article key={route.id} className="route-item">
+        {routes.map((route, idx) => (
+          <article
+            key={route.id}
+            className={`route-item ${selectedRouteIndex === idx ? 'route-selected' : ''}`}
+            onClick={() => onRouteSelect?.(selectedRouteIndex === idx ? null : idx)}
+            style={{
+              cursor: 'pointer',
+              transition: 'all 0.3s ease',
+              border: selectedRouteIndex === idx ? '2px solid #1A73E8' : '2px solid transparent',
+              borderRadius: '10px',
+              backgroundColor: selectedRouteIndex === idx ? 'rgba(26, 115, 232, 0.12)' : '',
+              boxShadow: selectedRouteIndex === idx ? '0 0 0 3px rgba(26, 115, 232, 0.2)' : '',
+            }}
+          >
             <div className={`route-label ${badgeColor(route.pollutionLevel)}`}>{route.label}</div>
             <div className="route-main">
               <div>
                 <p className="route-name">{route.name}</p>
                 <p className="route-meta">
-                  <span>● {durationSuffix ?? route.duration} min</span>
-                  <span>● {route.distance}</span>
+                  {(durationSuffix ?? route.duration) != null && (
+                    <span>● {(durationSuffix ?? route.duration)} min</span>
+                  )}
+                  {route.distance != null && (
+                    <span>● {route.distance}</span>
+                  )}
                   {route.pollutionLevel === 'low' && <span>🍃 Eco</span>}
                 </p>
               </div>
               <div className={`route-score ${badgeColor(route.pollutionLevel)}`}>
-                {route.duration}
+                {route.avgExposureAqi != null ? route.avgExposureAqi.toFixed(2) : '—'}
               </div>
             </div>
           </article>
@@ -53,4 +77,3 @@ const AlternativeRoutes: React.FC<AlternativeRoutesProps> = ({ routeInfo, routes
 };
 
 export default AlternativeRoutes;
-
