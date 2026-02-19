@@ -28,3 +28,9 @@ class ForecastResponse(BaseModel):
     next_hour_prediction: float
     twelve_hour_forecast: List[float]
     message: str
+
+class RouteRequest(BaseModel):
+    sLat: float
+    sLon: float
+    dLat: float
+    dLon: float
