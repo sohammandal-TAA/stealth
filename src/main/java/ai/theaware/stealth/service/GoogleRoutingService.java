@@ -18,6 +18,8 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.HttpClientErrorException;
 
 import com.google.maps.DirectionsApi;
 import com.google.maps.GeoApiContext;
@@ -102,8 +104,14 @@ public class GoogleRoutingService {
                     aiRequest,
                     Object.class
                 );
+            } catch (HttpServerErrorException e) {
+                log.error("AI Service 5xx Error: {} - Body: {}", e.getMessage(), e.getResponseBodyAsString());
+                return Map.of("error", "AI Service Error", "detail", e.getResponseBodyAsString());
+            } catch (HttpClientErrorException e) {
+                log.error("AI Service 4xx Error: {} - Body: {}", e.getMessage(), e.getResponseBodyAsString());
+                return Map.of("error", "Bad Request to AI Service", "detail", e.getResponseBodyAsString());
             } catch (RestClientException e) {
-                log.error("AI Service Error: {}", e.getMessage());
+                log.error("AI Service Unreachable: {}", e.getMessage());
                 return Map.of("error", "AI Service Unreachable");
             }
 
