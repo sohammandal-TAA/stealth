@@ -16,6 +16,9 @@ import java.io.IOException;
 public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHandler {
 
     private final UserRepository userRepository;
+    
+    @Value("${app.frontend.base-url}")
+    private String frontendUrl;
 
     public OAuth2LoginSuccessHandler(UserRepository userRepository) {
         this.userRepository = userRepository;

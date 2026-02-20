@@ -17,7 +17,7 @@ async def analyze_routes(data: JavaRouteRequest):
     try:
         start_p = fetch_google_aqi_profile(data.start_loc[0], data.start_loc[1], GOOGLE_API_KEY)
         end_p = fetch_google_aqi_profile(data.end_loc[0], data.end_loc[1], GOOGLE_API_KEY)
-    except Exception as e:
+    except Exception as e:  
         logging.error(f"Google API Error: {e}")
         raise HTTPException(status_code=503, detail="Air Quality Service temporarily unavailable")
     
@@ -88,14 +88,19 @@ async def history_data_all(data: ForecastRequest):
     except Exception as e:
         print(f"ERROR: Combined History failed: {str(e)}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
+    
 @router.post("/predict-all-stations")
 async def predict_all_stations(data: ForecastRequest):
+    weather_res = fetch_google_weather_history(data.lat, data.lon, GOOGLE_API_KEY)
+    aqi_res = fetch_google_aqi_history(data.lat, data.lon, GOOGLE_API_KEY)
     try:
-        # Step 1: Fetch Real History (Google API logic)
-        weather_res = fetch_google_weather_history(data.lat, data.lon, GOOGLE_API_KEY)
-        aqi_res = fetch_google_aqi_history(data.lat, data.lon, GOOGLE_API_KEY)
-        
-        # Step 2: Sync & Clean
+        # ✅ Check for errors before touching ["history"]
+        if "error" in weather_res:
+            return {"status": "error", "message": f"Weather API failed: {weather_res['error']}"}
+        if "error" in aqi_res:
+            return {"status": "error", "message": f"AQI API failed: {aqi_res['error']}"}
+
+        # Step 2: Sync & Clean — now safe to access ["history"]
         combined_history = []
         limit = min(len(weather_res["history"]), len(aqi_res["history"]))
         

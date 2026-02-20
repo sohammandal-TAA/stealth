@@ -13,6 +13,7 @@ import java.util.stream.Collectors;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.PrecisionModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -36,34 +37,32 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class GoogleRoutingService {
 
-    @Value("${google.maps.api.key}")
-    private String apiKey;
-
     @Value("${app.ai.service.url}")
     private String aiServiceUrl;
 
+    private final GeoApiContext geoApiContext;
     private final RouteRepository routeRepository;
     private final GeometryFactory geometryFactory;
     private final RestTemplate restTemplate;
 
     private static final double INTERVAL_METERS = 1000.0;
 
-    public GoogleRoutingService(RouteRepository routeRepository, 
-                                RestTemplate restTemplate) {
+    public GoogleRoutingService(RouteRepository routeRepository,
+                            @Qualifier("aiRestTemplate") RestTemplate restTemplate,
+                            GeoApiContext geoApiContext) {
         this.routeRepository = routeRepository;
         this.restTemplate = restTemplate;
+        this.geoApiContext = geoApiContext;
         this.geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
     }
 
-    @Cacheable(value = "aqi_routes", 
-           key = "#sLat + ',' + #sLon + ',' + #dLat + ',' + #dLon + ',' + #user.email")
+    @Cacheable(value = "aqi_routes",
+            key = "#sLat + ',' + #sLon + ',' + #dLat + ',' + #dLon")
     public Object processRoute(Double sLat, Double sLon, Double dLat, Double dLon, Users user) {
-        System.out.println("[CACHE MISS] Processing fresh request for user: " + user.getEmail());
-
-        GeoApiContext context = new GeoApiContext.Builder().apiKey(apiKey).build();
+        log.info("[CACHE MISS] Processing fresh request for user: {}", user.getEmail());
 
         try {
-            DirectionsResult result = DirectionsApi.newRequest(context)
+            DirectionsResult result = DirectionsApi.newRequest(geoApiContext)
                     .origin(new LatLng(sLat, sLon))
                     .destination(new LatLng(dLat, dLon))
                     .alternatives(true)
@@ -89,18 +88,18 @@ public class GoogleRoutingService {
             }
 
             Map<String, Object> aiRequest = Map.of(
-                "start_loc", List.of(sLat, sLon),
-                "end_loc",   List.of(dLat, dLon),
-                "routeCount", routesList.size(),
-                "routes",    routesList
+                    "start_loc", List.of(sLat, sLon),
+                    "end_loc", List.of(dLat, dLon),
+                    "routeCount", routesList.size(),
+                    "routes", routesList
             );
 
             Object aiResponse;
             try {
                 aiResponse = restTemplate.postForObject(
-                    aiServiceUrl,
-                    aiRequest,
-                    Object.class
+                        aiServiceUrl,
+                        aiRequest,
+                        Object.class
                 );
             } catch (RestClientException e) {
                 log.error("AI Service Error: {}", e.getMessage());
@@ -114,16 +113,12 @@ public class GoogleRoutingService {
         } catch (ApiException | IOException | InterruptedException e) {
             log.error("Fatal routing error", e);
             return Map.of("error", "Processing Error", "message", e.getMessage());
-
-        } finally {
-            context.shutdown();
         }
     }
 
-    private void checkAndSaveHistory(Double sLat, Double sLon, Double dLat, Double dLon, 
+    private void checkAndSaveHistory(Double sLat, Double sLon, Double dLat, Double dLon,
                                      Users user, DirectionsRoute primaryRoute) {
-        
-        // Find the absolute last route this specific user requested
+
         Optional<Route> lastEntry = routeRepository.findFirstByUserOrderByCreatedAtDesc(user);
 
         boolean isDuplicate = lastEntry.isPresent() &&
@@ -133,18 +128,18 @@ public class GoogleRoutingService {
                 lastEntry.get().getEndLon().equals(dLon);
 
         if (isDuplicate) {
-            System.out.println("Route already exists in history for " + user.getEmail() + ". Skipping DB save.");
+            log.debug("Route already exists in history for {}. Skipping DB save.", user.getEmail());
         } else {
             try {
                 saveToDatabase(sLat, sLon, dLat, dLon, user, primaryRoute);
-                System.out.println("Successfully logged history for " + user.getEmail());
+                log.info("Successfully logged history for {}", user.getEmail());
             } catch (Exception e) {
-                System.err.println("History save failed: " + e.getMessage());
+                log.error("History save failed for {}: {}", user.getEmail(), e.getMessage());
             }
         }
     }
 
-    private void saveToDatabase(Double sLat, Double sLon, Double dLat, Double dLon, 
+    private void saveToDatabase(Double sLat, Double sLon, Double dLat, Double dLon,
                                 Users user, DirectionsRoute primaryRoute) throws Exception {
         Route routeEntity = new Route();
         routeEntity.setUser(user);
@@ -158,7 +153,7 @@ public class GoogleRoutingService {
         Coordinate[] jtsCoords = path.stream()
                 .map(p -> new Coordinate(p.lng, p.lat))
                 .toArray(Coordinate[]::new);
-        
+
         routeEntity.setGeom(geometryFactory.createLineString(jtsCoords));
         routeRepository.save(routeEntity);
     }
@@ -199,8 +194,8 @@ public class GoogleRoutingService {
         double dLat = Math.toRadians(lat2 - lat1);
         double dLon = Math.toRadians(lon2 - lon1);
         double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                   Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
-                   Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
         return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 }

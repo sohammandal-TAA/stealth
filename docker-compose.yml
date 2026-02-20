@@ -1,3 +1,91 @@
+# version: '3.8'
+
+# services:
+#   postgres:
+#     image: postgis/postgis:15-3.3-alpine
+#     container_name: stealth-db
+#     env_file:
+#       - .env
+#     environment:
+#       - POSTGRES_DB=stealth_db
+#       - POSTGRES_USER=${DB_USERNAME}
+#       - POSTGRES_PASSWORD=${DB_PASSWORD}
+#     ports:
+#       - "5432:5432"
+#     healthcheck:
+#       test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d stealth_db"]
+#       interval: 5s
+#       timeout: 5s
+#       retries: 5
+#     networks:
+#       - stealth-net
+#     volumes:
+#       - db_data:/var/lib/postgresql/data
+
+#   ai-service:
+#     build:
+#       context: .
+#       dockerfile_inline: |
+#         FROM python:3.12-slim
+#         WORKDIR /app
+#         RUN apt-get update && apt-get install -y build-essential --no-install-recommends && rm -rf /var/lib/apt/lists/*
+#         COPY requirements.txt .
+#         RUN pip install --no-cache-dir -r requirements.txt
+#         COPY python_research/ ./python_research/
+#         COPY main.py .
+#         EXPOSE 8000
+#         CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+#     volumes:
+#       - ./python_research/models:/app/python_research/models
+#     container_name: ai-service
+#     ports:
+#       - "8000:8000"
+#     env_file:
+#       - .env
+#     networks:
+#       - stealth-net
+
+#   stealth-app:
+#     build: .
+#     container_name: stealth-app
+#     depends_on:
+#       postgres:
+#         condition: service_healthy
+#       ai-service:
+#         condition: service_started
+#     ports:
+#       - "8080:8080"
+#     # Injecting the .env file directly into the Spring container
+#     env_file:
+#       - .env
+#     environment:
+#       # Database
+#       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/stealth_db
+#       - SPRING_DATASOURCE_USERNAME=${DB_USERNAME}
+#       - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
+      
+#       # Networking - Always use internal service names
+#       - APP_AI_SERVICE_URL=${AI_SERVICE_URL}
+#       - APP_AI_PREDICT_URL=${AI_SERVICE_PREDICT_URL}
+
+#       # Mapping your specific .env keys to Spring properties 
+#       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
+#       - APP_FRONTEND_URL=${FRONTEND_URL}
+#       - SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_ID=${SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_ID}
+#       - SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_SECRET=${SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_SECRET}
+#       - SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_REDIRECT_URI=${OAUTH2_REDIRECT_URI}
+#     networks:
+#       - stealth-net
+
+# networks:
+#   stealth-net:
+#     driver: bridge
+
+# volumes:
+#   db_data:
+
+
+
 version: '3.8'
 
 services:
@@ -27,8 +115,8 @@ services:
         FROM python:3.12-slim
         WORKDIR /app
         RUN apt-get update && apt-get install -y build-essential --no-install-recommends && rm -rf /var/lib/apt/lists/*
-        COPY requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
+        COPY requirements-docker.txt .
+        RUN pip install --no-cache-dir -r requirements-docker.txt
         COPY python_research/ ./python_research/
         COPY main.py .
         EXPOSE 8000
@@ -42,6 +130,7 @@ services:
       - stealth-net
 
   stealth-app:
+<<<<<<< Updated upstream
       build: .
       container_name: stealth-app
       depends_on:
@@ -62,6 +151,39 @@ services:
         - SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_REDIRECT_URI=${OAUTH2_REDIRECT_URI}
       networks:
         - stealth-net
+=======
+    build: .
+    container_name: stealth-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-service:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    environment:
+      # Database
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/stealth_db
+      - SPRING_DATASOURCE_USERNAME=${DB_USERNAME}
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
+      
+      # Google Maps
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
+      
+      # AI Service URLs
+      - APP_AI_SERVICE_URL=${AI_SERVICE_URL}
+      - APP_AI_PREDICT_URL=${AI_SERVICE_PREDICT_URL}
+      
+      # Frontends
+      - APP_FRONTEND_URL=${FRONTEND_URL}
+      
+      # OAuth2
+      - SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_ID=${SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_ID}
+      - SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_SECRET=${SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_SECRET}
+      - SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_REDIRECT_URI=${OAUTH2_REDIRECT_URI}
+    networks:
+      - stealth-net
+>>>>>>> Stashed changes
 
 networks:
   stealth-net:

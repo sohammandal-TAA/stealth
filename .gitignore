@@ -33,7 +33,6 @@ build/
 .vscode/
 
 ## env
-src/main/resources/application.properties
 .env
 
 ## mvn w

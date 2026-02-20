@@ -40,6 +40,17 @@ public class RouteController {
 
         Users user = userService.findByEmail(email);
 
+<<<<<<< Updated upstream
+=======
+        predictionService.triggerPrediction(
+        email,
+        request.getSLat(),
+        request.getSLon(),
+        request.getDLat(),
+        request.getDLon()
+    );
+
+>>>>>>> Stashed changes
         Object result = googleRoutingService.processRoute(
                 request.getSLat(), 
                 request.getSLon(), 
@@ -50,4 +61,21 @@ public class RouteController {
 
         return ResponseEntity.ok(result);
     }
+<<<<<<< Updated upstream
 }
+=======
+
+    @GetMapping("/predict")
+    public ResponseEntity<?> getPrediction(
+            @AuthenticationPrincipal OAuth2User principal) {
+
+        if (principal == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "User not authenticated"));
+        }
+
+        String email = principal.getAttribute("email");
+        Object result = predictionService.getPrediction(email);
+        return ResponseEntity.ok(result);
+    }
+}
+>>>>>>> Stashed changes
