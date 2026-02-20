@@ -48,12 +48,26 @@ async def analyze_routes(data: JavaRouteRequest):
     for i, route in enumerate(data.routes):
         points = [[c.lat, c.lng] for c in route.coordinates]
         path_details = interpolate_pollutants(start_p, end_p, points)
+
+        pm25_vals = [p['pm25'] for p in path_details if isinstance(p.get('pm25'), (int, float))]
+        pm10_vals = [p['pm10'] for p in path_details if isinstance(p.get('pm10'), (int, float))]
+        co_vals   = [p['co']   for p in path_details if isinstance(p.get('co'), (int, float))]
+
+        avg_pm25 = round(sum(pm25_vals) / len(pm25_vals), 2) if pm25_vals else 0
+        avg_pm10 = round(sum(pm10_vals) / len(pm10_vals), 2) if pm10_vals else 0
+        avg_co   = round(sum(co_vals)   / len(co_vals), 2) if co_vals else 0
+
         
-        aqis = [p['aqi'] for p in path_details if isinstance(p['aqi'], (int, float))]
-        avg_exposure = sum(aqis)/len(aqis) if aqis else 0
-        
+        # aqis = [p['aqi'] for p in path_details if isinstance(p['aqi'], (int, float))]
+        # # avg_exposure = sum(aqis)/len(aqis) if aqis else 0
+       
         comparisons[f"Route_{i+1}"] = {
-            "avg_exposure_aqi": round(avg_exposure, 2),
+            # "avg_exposure_aqi": round(avg_exposure, 2),
+            "distance": route.distance,
+            "duration": route.duration,
+            "avg_pm25": avg_pm25,
+            "avg_pm10": avg_pm10,
+            "avg_co": avg_co,
             "details": path_details
         }
     return {"status": "success", 
@@ -65,6 +79,7 @@ async def analyze_routes(data: JavaRouteRequest):
 async def history_data_all():
     try:
         async def process_station(station_id, coords):
+            
             try:
                 # Fetch weather + AQI in parallel
                 weather_task = fetch_google_weather_history(
@@ -135,16 +150,10 @@ async def predict_all_stations(data: RouteRequest):
         # ---- Step 1: Fetch weather + AQI in parallel for ALL stations ----
 
         async def fetch_station_data(station_id, coords):
-            weather_task = fetch_google_weather_history(
-                coords["lat"], coords["lon"], http_client
-            )
-            aqi_task = fetch_google_aqi_history(
-                coords["lat"], coords["lon"], http_client
-            )
+            weather_task = fetch_google_weather_history(coords["lat"], coords["lon"], http_client)
+            aqi_task = fetch_google_aqi_history(coords["lat"], coords["lon"], http_client)
 
-            weather_res, aqi_res = await asyncio.gather(
-                weather_task, aqi_task
-            )
+            weather_res, aqi_res = await asyncio.gather(weather_task, aqi_task)
 
             return station_id, weather_res, aqi_res
 
