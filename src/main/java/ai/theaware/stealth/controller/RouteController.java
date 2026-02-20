@@ -45,7 +45,13 @@ public class RouteController {
         String email = principal.getAttribute("email");
         Users user = userService.findByEmail(email);
 
-        predictionService.triggerPrediction(email, request.getSLat(), request.getSLon());
+        predictionService.triggerPrediction(
+        email,
+        request.getSLat(),
+        request.getSLon(),
+        request.getDLat(),
+        request.getDLon()
+    );
 
         Object result = googleRoutingService.processRoute(
                 request.getSLat(),
