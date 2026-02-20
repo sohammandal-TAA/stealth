@@ -28,12 +28,17 @@ public class PredictionService {
     }
 
     @Async
-    public void triggerPrediction(String userEmail, Double lat, Double lon) {
+    public void triggerPrediction(String userEmail, Double sLat, Double sLon, Double dLat, Double dLon) {
         CompletableFuture<Object> future = new CompletableFuture<>();
         pendingPredictions.put(userEmail, future);
 
         try {
-            Map<String, Object> payload = Map.of("lat", lat, "lon", lon);
+            Map<String, Object> payload = Map.of(
+                    "sLat", sLat,
+                    "sLon", sLon,
+                    "dLat", dLat,
+                    "dLon", dLon
+        );
 
             log.info("Triggering AI Prediction at: {}", predictUrl);
             Object result = restTemplate.postForObject(predictUrl, payload, Object.class);
