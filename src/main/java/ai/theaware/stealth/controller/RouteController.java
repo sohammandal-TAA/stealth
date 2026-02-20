@@ -9,9 +9,11 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import ai.theaware.stealth.dto.RouteRequestDTO;
+import ai.theaware.stealth.dto.RouteResponseDTO;
 import ai.theaware.stealth.entity.Users;
 import ai.theaware.stealth.service.GoogleRoutingService;
 import ai.theaware.stealth.service.PredictionService;
@@ -29,6 +31,18 @@ public class RouteController {
         this.googleRoutingService = googleRoutingService;
         this.predictionService = predictionService;
         this.userService = userService;
+    }
+
+    @GetMapping("/debug-resampled")
+    public ResponseEntity<RouteResponseDTO> getDebugResampled(
+            @RequestParam Double sLat,
+            @RequestParam Double sLon,
+            @RequestParam Double dLat,
+            @RequestParam Double dLon) {
+        
+        // We call a modified version of your service logic
+        RouteResponseDTO processedData = googleRoutingService.getProcessedRouteDTO(sLat, sLon, dLat, dLon);
+        return ResponseEntity.ok(processedData);
     }
 
     @PostMapping("/process")

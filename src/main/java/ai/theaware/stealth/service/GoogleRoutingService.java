@@ -13,19 +13,20 @@ import java.util.stream.Collectors;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.PrecisionModel;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.maps.DirectionsApi;
 import com.google.maps.GeoApiContext;
 import com.google.maps.errors.ApiException;
 import com.google.maps.model.DirectionsResult;
 import com.google.maps.model.DirectionsRoute;
 import com.google.maps.model.LatLng;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import ai.theaware.stealth.dto.RouteResponseDTO;
 import ai.theaware.stealth.entity.Route;
@@ -38,71 +39,56 @@ import lombok.extern.slf4j.Slf4j;
 public class GoogleRoutingService {
 
     @Value("${app.ai.service.url}")
-    private String aiServiceUrl;
+    private String aiAnalyzeUrl;
 
     private final GeoApiContext geoApiContext;
     private final RouteRepository routeRepository;
     private final GeometryFactory geometryFactory;
     private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper;
 
     private static final double INTERVAL_METERS = 1000.0;
 
-    public GoogleRoutingService(RouteRepository routeRepository,
-                            @Qualifier("aiRestTemplate") RestTemplate restTemplate,
-                            GeoApiContext geoApiContext) {
+    public GoogleRoutingService(RouteRepository routeRepository, RestTemplate restTemplate,
+                               GeoApiContext geoApiContext) {
         this.routeRepository = routeRepository;
         this.restTemplate = restTemplate;
         this.geoApiContext = geoApiContext;
+        this.objectMapper = new ObjectMapper();
         this.geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
     }
 
-    @Cacheable(value = "aqi_routes",
-            key = "#sLat + ',' + #sLon + ',' + #dLat + ',' + #dLon")
+    public RouteResponseDTO getProcessedRouteDTO(Double sLat, Double sLon, Double dLat, Double dLon) {
+        try {
+            DirectionsResult result = fetchDirectionsFromGoogle(sLat, sLon, dLat, dLon);
+            return buildRouteResponseDTO(result);
+        } catch (ApiException | IOException | InterruptedException e) {
+            log.error("Failed to build Debug DTO", e);
+            throw new RuntimeException("Resampling failed: " + e.getMessage());
+        }
+    }
+
+    @Cacheable(value = "aqi_routes", key = "#sLat + ',' + #sLon + ',' + #dLat + ',' + #dLon")
     public Object processRoute(Double sLat, Double sLon, Double dLat, Double dLon, Users user) {
         log.info("[CACHE MISS] Processing fresh request for user: {}", user.getEmail());
 
         try {
-            DirectionsResult result = DirectionsApi.newRequest(geoApiContext)
-                    .origin(new LatLng(sLat, sLon))
-                    .destination(new LatLng(dLat, dLon))
-                    .alternatives(true)
-                    .await();
+            DirectionsResult result = fetchDirectionsFromGoogle(sLat, sLon, dLat, dLon);
 
-            List<RouteResponseDTO.RouteDetail> routesList = new ArrayList<>();
-
-            for (DirectionsRoute route : result.routes) {
-                List<RouteResponseDTO.Coordinate> rawCoords = route.overviewPolyline.decodePath()
-                        .stream()
-                        .map(p -> new RouteResponseDTO.Coordinate(p.lat, p.lng))
-                        .collect(Collectors.toList());
-
-                List<RouteResponseDTO.Coordinate> cleaned = resamplePath(rawCoords, INTERVAL_METERS);
-
-                RouteResponseDTO.RouteDetail detail = new RouteResponseDTO.RouteDetail(
-                        route.legs[0].distance.humanReadable,
-                        route.legs[0].distance.inMeters,
-                        route.legs[0].duration.humanReadable,
-                        cleaned
-                );
-                routesList.add(detail);
-            }
+            RouteResponseDTO routesDto = buildRouteResponseDTO(result);
 
             Map<String, Object> aiRequest = Map.of(
                     "start_loc", List.of(sLat, sLon),
                     "end_loc", List.of(dLat, dLon),
-                    "routeCount", routesList.size(),
-                    "routes", routesList
+                    "routeCount", routesDto.getRouteCount(),
+                    "routes", routesDto.getRoutes()
             );
-
+            logJsonPayload(aiRequest);
             Object aiResponse;
             try {
-                aiResponse = restTemplate.postForObject(
-                        aiServiceUrl,
-                        aiRequest,
-                        Object.class
-                );
+                aiResponse = restTemplate.postForObject(aiAnalyzeUrl, aiRequest, Object.class);
             } catch (RestClientException e) {
-                log.error("AI Service Error: {}", e.getMessage());
+                log.error("AI Service Error at {}: {}", aiAnalyzeUrl, e.getMessage());
                 return Map.of("error", "AI Service Unreachable");
             }
 
@@ -116,9 +102,47 @@ public class GoogleRoutingService {
         }
     }
 
+    private DirectionsResult fetchDirectionsFromGoogle(Double sLat, Double sLon, Double dLat, Double dLon) 
+            throws ApiException, InterruptedException, IOException {
+        return DirectionsApi.newRequest(geoApiContext)
+                .origin(new LatLng(sLat, sLon))
+                .destination(new LatLng(dLat, dLon))
+                .alternatives(true)
+                .await();
+    }
+
+    private RouteResponseDTO buildRouteResponseDTO(DirectionsResult result) {
+        List<RouteResponseDTO.RouteDetail> routesList = new ArrayList<>();
+
+        for (DirectionsRoute route : result.routes) {
+            List<RouteResponseDTO.Coordinate> rawCoords = route.overviewPolyline.decodePath()
+                    .stream()
+                    .map(p -> new RouteResponseDTO.Coordinate(p.lat, p.lng))
+                    .collect(Collectors.toList());
+
+            List<RouteResponseDTO.Coordinate> resampled = resamplePath(rawCoords, INTERVAL_METERS);
+
+            routesList.add(new RouteResponseDTO.RouteDetail(
+                    route.legs[0].distance.humanReadable,
+                    route.legs[0].distance.inMeters,
+                    route.legs[0].duration.humanReadable,
+                    resampled
+            ));
+        }
+        return new RouteResponseDTO(routesList.size(), routesList);
+    }
+
+    private void logJsonPayload(Object payload) {
+        try {
+            String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(payload);
+            log.info("\n==============================\nSENDING TO AI SERVICE:\n{}\n==============================", json);
+        } catch (JsonProcessingException e) {
+            log.warn("Could not log JSON payload: {}", e.getMessage());
+        }
+    }
+
     private void checkAndSaveHistory(Double sLat, Double sLon, Double dLat, Double dLon,
                                      Users user, DirectionsRoute primaryRoute) {
-
         Optional<Route> lastEntry = routeRepository.findFirstByUserOrderByCreatedAtDesc(user);
 
         boolean isDuplicate = lastEntry.isPresent() &&
